@@ -1,6 +1,6 @@
 {
-  "name": "xlsx-populate",
-  "version": "1.17.0",
+  "name": "@fielded/xlsx-populate",
+  "version": "1.17.1",
   "description": "Excel XLSX parser/generator written in JavaScript with Node.js and browser support, jQuery/d3-style method chaining, and a focus on keeping existing workbook features and styles in tact.",
   "keywords": [
     "excel",
@@ -39,9 +39,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dtjohnson/xlsx-populate.git"
+    "url": "https://github.com/fielded/xlsx-populate.git"
   },
-  "bugs": "https://github.com/dtjohnson/xlsx-populate/issues",
+  "bugs": "https://github.com/fielded/xlsx-populate/issues",
   "devDependencies": {
     "babel-core": "^6.26.3",
     "babel-preset-env": "^1.7.0",
