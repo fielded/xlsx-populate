@@ -3,7 +3,7 @@
 const proxyquire = require("proxyquire");
 
 describe("Cell", () => {
-    let Cell, cell, cellNode, row, sheet, workbook, sharedStrings, styleSheet, style, FormulaError, range;
+    let Cell, cell, cellNode, RichText, row, sheet, workbook, sharedStrings, styleSheet, style, FormulaError, range;
 
     beforeEach(() => {
         FormulaError = jasmine.createSpyObj("FormulaError", ["getError"]);
@@ -14,7 +14,11 @@ describe("Cell", () => {
             '@noCallThru': true
         });
 
-        const Style = class {}
+        RichText = proxyquire("../../lib/RichText", {
+            '@noCallThru': true
+        });
+
+        const Style = class {};
         if (!Style.name) Style.name = "Style";
         Style.prototype.id = jasmine.createSpy("Style.id").and.returnValue(4);
         Style.prototype.style = jasmine.createSpy("Style.style").and.callFake(name => `STYLE:${name}`);
@@ -33,7 +37,7 @@ describe("Cell", () => {
 
         range = jasmine.createSpyObj('range', ['value', 'style']);
 
-        sheet = jasmine.createSpyObj('sheet', ['createStyle', 'activeCell', 'updateMaxSharedFormulaId', 'name', 'column', 'clearCellsUsingSharedFormula', 'cell', 'range', 'hyperlink', 'dataValidation']);
+        sheet = jasmine.createSpyObj('sheet', ['createStyle', 'activeCell', 'updateMaxSharedFormulaId', 'name', 'column', 'clearCellsUsingSharedFormula', 'cell', 'range', 'hyperlink', 'dataValidation', 'verticalPageBreaks']);
         sheet.activeCell.and.returnValue("ACTIVE CELL");
         sheet.name.and.returnValue("NAME");
         sheet.column.and.returnValue("COLUMN");
@@ -41,7 +45,7 @@ describe("Cell", () => {
         sheet.range.and.returnValue(range);
         sheet.dataValidation.and.returnValue("DATAVALIDATION");
 
-        row = jasmine.createSpyObj('row', ['sheet', 'workbook', 'rowNumber']);
+        row = jasmine.createSpyObj('row', ['sheet', 'workbook', 'rowNumber', 'addPageBreak']);
         row.sheet.and.returnValue(sheet);
         row.workbook.and.returnValue(workbook);
         row.rowNumber.and.returnValue(7);
@@ -201,6 +205,12 @@ describe("Cell", () => {
             expect(cell.hyperlink("HYPERLINK")).toBe(cell);
             expect(sheet.hyperlink).toHaveBeenCalledWith("C7", "HYPERLINK");
         });
+
+        it("should set the hyperlink with tooltip on the sheet", () => {
+            const opts = { hyperlink: "HYPERLINK", tooltip: "TOOLTIP" };
+            expect(cell.hyperlink(opts)).toBe(cell);
+            expect(sheet.hyperlink).toHaveBeenCalledWith("C7", opts);
+        });
     });
 
     describe('dataValidation', () => {
@@ -235,13 +245,12 @@ describe("Cell", () => {
                 formula1: 'test1, test2, test3',
                 formula2: ''
             });
-        })
+        });
 
         it("should get the dataValidation from the cell", () => {
             expect(cell.dataValidation()).toBe("DATAVALIDATION");
             expect(sheet.dataValidation).toHaveBeenCalledWith("C7");
         });
-
     });
 
     describe("find", () => {
@@ -454,6 +463,12 @@ describe("Cell", () => {
             expect(cell.workbook()).toBe(workbook);
         });
     });
+    
+    describe('addHorizontalPageBreak', () => {
+        it("should add a rowBreak and return the cell", () => {
+            expect(cell.addHorizontalPageBreak()).toBe(cell);
+        });
+    });
 
     /* INTERNAL */
 
@@ -575,7 +590,8 @@ describe("Cell", () => {
         });
 
         it("should set a rich text value", () => {
-            cell._value = [{ name: 'r' }];
+            const rt = new RichText();
+            cell._value = rt;
 
             expect(cell.toXml()).toEqualJson({
                 name: 'c',
@@ -588,7 +604,7 @@ describe("Cell", () => {
                     children: [7]
                 }]
             });
-            expect(sharedStrings.getIndexForString).toHaveBeenCalledWith([{ name: 'r' }]);
+            expect(sharedStrings.getIndexForString).toHaveBeenCalledWith(rt.toXml());
         });
 
         it("should set a true bool value", () => {
@@ -812,6 +828,14 @@ describe("Cell", () => {
             cell._parseNode(node);
             expect(cell._value).toBe("STRING");
             expect(sharedStrings.getStringByIndex).toHaveBeenCalledWith(5);
+        });
+
+        it("should parse string values with no shared string child", () => {
+            node.attributes.t = "s";
+            node.children = [];
+
+            cell._parseNode(node);
+            expect(cell._value).toBe("");
         });
 
         it("should parse simple string values", () => {

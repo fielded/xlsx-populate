@@ -3,7 +3,7 @@
 const proxyquire = require("proxyquire");
 
 describe("Sheet", () => {
-    let Sheet, Range, Row, Cell, Column, Relationships, sheet, idNode, sheetNode, workbook;
+    let Sheet, Range, Row, Cell, Column, Relationships, sheet, idNode, sheetNode, workbook, PageBreaks;
 
     beforeEach(() => {
         let i = 0;
@@ -18,6 +18,7 @@ describe("Sheet", () => {
         Column = jasmine.createSpy("Column");
         Cell = jasmine.createSpy("Cell");
         Cell.prototype.address = jasmine.createSpy("Cell.address").and.returnValue("ADDRESS");
+        PageBreaks = jasmine.createSpy("PageBreaks", ["add", "remove", "list"]);
 
         Relationships = jasmine.createSpy("Relationships");
         Relationships.prototype.findById = jasmine.createSpy("Relationships.findById").and.callFake(id => ({ attributes: { Target: `TARGET:${id}` } }));
@@ -49,8 +50,7 @@ describe("Sheet", () => {
             },
             children: [
                 { name: 'sheetFormatPr', attributes: {}, children: [] },
-                { name: 'sheetData', attributes: {}, children: [] },
-                { name: 'pageMargins', attributes: {}, children: [] }
+                { name: 'sheetData', attributes: {}, children: [] }
             ]
         };
 
@@ -360,6 +360,20 @@ describe("Sheet", () => {
             expect(sheet.name("a new name")).toBe(sheet);
             expect(sheet.name()).toBe("a new name");
         });
+
+        it("sheet name should be a string", () => {
+            idNode = {
+                name: 'sheet',
+                attributes: {
+                    name: 1,
+                    sheetId: '1',
+                    'r:id': 'rId1'
+                },
+                children: []
+            };
+            sheet = new Sheet(workbook, idNode, sheetNode);
+            expect(sheet.name()).toBe("1");
+        });
     });
 
     describe("range", () => {
@@ -410,24 +424,24 @@ describe("Sheet", () => {
         });
 
         it("should add a XML node", () => {
-            let Range = proxyquire("../../lib/Range", {
+            const Range = proxyquire("../../lib/Range", {
                 '@noCallThru': true
             });
-            let startCell = jasmine.createSpyObj("startCell", ["rowNumber", "columnNumber", "columnName"]);
+            const startCell = jasmine.createSpyObj("startCell", ["rowNumber", "columnNumber", "columnName"]);
             startCell.columnName.and.returnValue("B");
             startCell.columnNumber.and.returnValue(2);
             startCell.rowNumber.and.returnValue(3);
 
-            let endCell = jasmine.createSpyObj("endCell", ["rowNumber", "columnNumber", "columnName"]);
+            const endCell = jasmine.createSpyObj("endCell", ["rowNumber", "columnNumber", "columnName"]);
             endCell.columnName.and.returnValue("C");
             endCell.columnNumber.and.returnValue(3);
             endCell.rowNumber.and.returnValue(3);
 
             sheet.autoFilter(new Range(startCell, endCell));
 
-            let props = sheet.toXmls().sheet.children.filter((child) => (child.name == "autoFilter"));
+            const props = sheet.toXmls().sheet.children.filter(child => child.name === "autoFilter");
 
-            expect(props.length == 1);
+            expect(props.length === 1);
             expect(props[0].attributes.ref).toEqual("B3:C3");
         });
     });
@@ -449,6 +463,14 @@ describe("Sheet", () => {
                 },
                 children: []
             });
+        });
+
+        it("should throw an exception on a row number of 0", () => {
+            expect(() => sheet.row(0)).toThrowError(RangeError);
+        });
+
+        it("should throw an exception on a row number of -1", () => {
+            expect(() => sheet.row(-1)).toThrowError(RangeError);
         });
     });
 
@@ -553,6 +575,30 @@ describe("Sheet", () => {
             expect(sheetViewNode.attributes.tabSelected).toBe(1);
 
             expect(sheet.tabSelected(false)).toBe(sheet);
+            expect(sheetViewNode.attributes.tabSelected).toBeUndefined();
+        });
+    });
+
+    describe("rightToLeft", () => {
+        let sheetViewNode;
+
+        beforeEach(() => {
+            sheetViewNode = { attributes: {} };
+            spyOn(sheet, "_getOrCreateSheetViewNode").and.returnValue(sheetViewNode);
+        });
+
+        it("should return rightToLeft state", () => {
+            expect(sheet.rightToLeft()).toBe(undefined);
+
+            sheetViewNode.attributes.rightToLeft = true;
+            expect(sheet.rightToLeft()).toBe(true);
+        });
+
+        it("should rtl/ltr the sheet", () => {
+            expect(sheet.rightToLeft(true)).toBe(sheet);
+            expect(sheetViewNode.attributes.rightToLeft).toBe(true);
+
+            expect(sheet.rightToLeft(false)).toBe(sheet);
             expect(sheetViewNode.attributes.tabSelected).toBeUndefined();
         });
     });
@@ -786,6 +832,16 @@ describe("Sheet", () => {
             });
         });
 
+        it("should add an internal hyperlink entry", () => {
+            const hyperlink = "Sheet1!A1";
+            expect(sheet.hyperlink("ADDRESS", hyperlink)).toBe(sheet);
+            expect(sheet._hyperlinks.ADDRESS.attributes).toEqualJson({
+                ref: "ADDRESS",
+                location: hyperlink,
+                display: hyperlink
+            });
+        });
+
         it("should remove a hyperlink entry", () => {
             sheet._hyperlinks = {
                 ADDRESS1: {},
@@ -805,6 +861,298 @@ describe("Sheet", () => {
 
             sheet.hyperlink("ADDRESS2", undefined);
             expect(sheet._hyperlinks).toEqualJson({});
+
+            // TODO: test that relationship is deleted
+        });
+
+        it("should set the hyperlink and the tooltip on the sheet", () => {
+            const opts = {
+                hyperlink: "HYPERLINK",
+                tooltip: "TOOLTIP"
+            };
+            const hyperlink = "HYPERLINK";
+            expect(sheet.hyperlink("ADDRESS", opts)).toBe(sheet);
+            expect(sheet._hyperlinks.ADDRESS.attributes).toEqualJson({
+                ref: "ADDRESS",
+                "r:id": "ID",
+                tooltip: "TOOLTIP"
+            });
+            expect(sheet._relationships.add).toHaveBeenCalledWith("hyperlink", hyperlink, "External");
+        });
+
+        it("should add a hyperlink entry using opts.email and opts.emailSubject", () => {
+            const opts = {
+                email: "USER@SERVER.COM",
+                emailSubject: "EMAIL SUBJECT"
+            };
+            const hyperlink = "mailto:USER@SERVER.COM?subject=EMAIL%20SUBJECT";
+            expect(sheet.hyperlink("ADDRESS", opts)).toBe(sheet);
+            expect(sheet._hyperlinks.ADDRESS.attributes).toEqualJson({
+                ref: "ADDRESS",
+                "r:id": "ID"
+            });
+            expect(sheet._relationships.add).toHaveBeenCalledWith("hyperlink", hyperlink, "External");
+        });
+
+        it("should add a hyperlink entry using opts.hyperlink and ignore opts.email and opts.emailSubject", () => {
+            const opts = {
+                hyperlink: "HYPERLINK",
+                email: "USER@SERVER.COM",
+                emailSubject: "EMAIL SUBJECT"
+            };
+            const hyperlink = "HYPERLINK";
+            expect(sheet.hyperlink("ADDRESS", opts)).toBe(sheet);
+            expect(sheet._hyperlinks.ADDRESS.attributes).toEqualJson({
+                ref: "ADDRESS",
+                "r:id": "ID"
+            });
+            expect(sheet._relationships.add).toHaveBeenCalledWith("hyperlink", hyperlink, "External");
+        });
+    });
+
+    describe("printOptions", () => {
+        it("should return the printOptions attribute value", () => {
+            sheet._printOptionsNode = {
+                name: 'printOptions',
+                attributes: {
+                    headings: 1,
+                    horizontalCentered: 0
+                },
+                children: []
+            };
+            expect(sheet.printOptions('headings')).toBe(true);
+            expect(sheet.printOptions('horizontalCentered')).toBe(false);
+            expect(sheet.printOptions('verticalCentered')).toBe(false);
+
+            delete sheet._printOptionsNode.attributes.headings;
+            expect(sheet.printOptions('headings')).toBe(false);
+        });
+
+        it("should add or update the printOptions attribute", () => {
+            sheet._printOptionsNode = {
+                name: 'printOptions',
+                attributes: {
+                    headings: 1
+                },
+                children: []
+            };
+
+            expect(sheet.printOptions('headings', false)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes.headings).toBeUndefined();
+
+            expect(sheet.printOptions('horizontalCentered', true)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes.horizontalCentered).toBe(1);
+
+            expect(sheet.printOptions('verticalCentered', true)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes.verticalCentered).toBe(1);
+        });
+
+        it("should throw an error if attempting to access unsupported attributes", () => {
+            sheet._printOptionsNode = {
+                name: 'printOptions',
+                attributes: {
+                    unsupportedAttribute: 'a value of some kind'
+                },
+                children: []
+            };
+
+            const theError = 'Sheet.printOptions: "unsupportedAttribute" is not supported.';
+            expect(() => sheet.printOptions('unsupportedAttribute')).toThrowError(Error, theError);
+            expect(() => sheet.printOptions('unsupportedAttribute', undefined)).toThrowError(Error, theError);
+            expect(() => sheet.printOptions('unsupportedAttribute', true)).toThrowError(Error, theError);
+
+            const theOtherError = 'Sheet.printOptions: "anotherUnsupportedAttribute" is not supported.';
+            expect(() => sheet.printOptions('anotherUnsupportedAttribute')).toThrowError(Error, theOtherError);
+            expect(() => sheet.printOptions('anotherUnsupportedAttribute', undefined)).toThrowError(Error, theOtherError);
+            expect(() => sheet.printOptions('anotherUnsupportedAttribute', true)).toThrowError(Error, theOtherError);
+        });
+
+        it("should remove a printOptions attribute", () => {
+            sheet._printOptionsNode = {
+                name: 'printOptions',
+                attributes: {
+                    headings: 1,
+                    horizontalCentered: 0
+                },
+                children: []
+            };
+
+            expect(sheet.printOptions('verticalCentered', undefined)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes).toEqualJson({
+                headings: 1,
+                horizontalCentered: 0
+            });
+
+            expect(sheet.printOptions('headings', undefined)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes).toEqualJson({
+                horizontalCentered: 0
+            });
+
+            expect(sheet.printOptions('horizontalCentered', undefined)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes).toEqualJson({});
+        });
+    });
+
+    describe("printGridLines", () => {
+        it("should return the combined gridLines and gridLinesSet state from printOptions", () => {
+            sheet._printOptionsNode = {
+                name: 'printOptions',
+                attributes: {
+                    headings: 1,
+                    gridLines: 1
+                },
+                children: []
+            };
+
+            expect(sheet.printGridLines()).toBe(false);
+
+            sheet._printOptionsNode.attributes.gridLinesSet = 1;
+            expect(sheet.printGridLines()).toBe(true);
+
+            sheet._printOptionsNode.attributes.gridLines = false;
+            expect(sheet.printGridLines()).toBe(false);
+        });
+
+        it("should add or update the gridLines and gridLinesSet printOptions attributes", () => {
+            sheet._printOptionsNode = {
+                name: 'printOptions',
+                attributes: {
+                    headings: 1,
+                    gridLines: 1
+                },
+                children: []
+            };
+
+            expect(sheet.printGridLines(true)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes).toEqualJson({
+                headings: 1,
+                gridLines: 1,
+                gridLinesSet: 1
+            });
+
+            expect(sheet.printGridLines(undefined)).toBe(sheet);
+            expect(sheet._printOptionsNode.attributes).toEqualJson({
+                headings: 1
+            });
+        });
+    });
+
+    describe("pageMargins", () => {
+        it("should return the pageMargins template preset value when attribute is undefined", () => {
+            sheet._pageMarginsPresetName = 'template';
+            sheet._pageMarginsPresets = {
+                template: {
+                    left: 1,
+                    right: 2,
+                    top: 3,
+                    bottom: 4,
+                    header: 5,
+                    footer: '6'
+                }
+            };
+            sheet._pageMarginsNode = {
+                name: 'pageMargins',
+                attributes: {
+                    left: 123,
+                    top: 456
+                },
+                children: []
+            };
+            expect(sheet.pageMargins('left')).toBe(123);
+            expect(sheet.pageMargins('top')).toBe(456);
+            expect(sheet.pageMargins('footer')).toBe(6);
+        });
+
+        it("should return the pageMargins attribute value without depending on preset", () => {
+            sheet._pageMarginsPresetName = 'PRESET_NAME';
+            sheet._pageMarginsNode = {
+                name: 'pageMargins',
+                attributes: {
+                    left: 0.7,
+                    footer: '0.3'
+                },
+                children: []
+            };
+
+            expect(sheet.pageMargins('left', '0.3')).toBe(sheet);
+            expect(sheet._pageMarginsNode.attributes.left, 1.2);
+
+            expect(sheet.pageMargins('footer', 0.7)).toBe(sheet);
+            expect(sheet._pageMarginsNode.attributes.footer, 0.3);
+
+            expect(sheet.pageMargins('header', 1.0)).toBe(sheet);
+            expect(sheet._pageMarginsNode.attributes.header, 1.0);
+        });
+
+        it("should throw an error if attempting to assign a value with an undefined preset", () => {
+            sheet._pageMarginsPresetName = undefined;
+            expect(() => sheet.pageMargins('left', 123)).toThrowError(Error, 'Sheet.pageMargins: preset is undefined.');
+        });
+
+        it("should throw an error if attempting to assign a value outside of range", () => {
+            sheet._pageMarginsPresetName = 'custom';
+            sheet._pageMarginsNode = {
+                name: 'pageMargins',
+                attributes: {
+                    left: 0.7,
+                    footer: '0.3'
+                },
+                children: []
+            };
+            const theError = 'Sheet.pageMargins: value too small - value must be greater than or equal to 0.';
+            expect(() => sheet.pageMargins('left', -0.123)).toThrowError(RangeError, theError);
+            expect(() => sheet.pageMargins('left', '-0.123')).toThrowError(RangeError, theError);
+        });
+    });
+
+    describe("pageMarginsPreset", () => {
+        it("should return the pageMargins preset value as undefined by default", () => {
+            expect(sheet.pageMarginsPreset()).toBeUndefined();
+        });
+
+        it("should return only new preset values when reassigned to a new preset", () => {
+            sheet.pageMarginsPreset('custom', {
+                left: 1,
+                right: 2,
+                top: 3,
+                bottom: 4,
+                header: 5,
+                footer: 6
+            });
+            expect(sheet.pageMargins('left', 123)).toBe(sheet);
+            expect(sheet.pageMargins('left')).toBe(123);
+            expect(sheet.pageMargins('header')).toBe(5);
+
+            expect(sheet.pageMarginsPreset('normal')).toBe(sheet);
+            expect(sheet.pageMargins('left')).toBe(0.7);
+            expect(sheet.pageMargins('header')).toBe(0.3);
+        });
+
+        it("should return original preset values when reassigned back again", () => {
+            sheet.pageMarginsPreset('custom', {
+                left: 1,
+                right: 2,
+                top: 3,
+                bottom: 4,
+                header: 5,
+                footer: 6
+            });
+            expect(sheet.pageMargins('left', 123)).toBe(sheet);
+            expect(sheet.pageMargins('left')).toBe(123);
+
+            expect(sheet.pageMarginsPreset('custom')).toBe(sheet);
+            expect(sheet.pageMargins('left')).toBe(1);
+            expect(sheet.pageMargins('header')).toBe(5);
+        });
+
+        it("should throw an error if accessing non-existing presets", () => {
+            expect(() => sheet.pageMarginsPreset('NOT_A_PRESET_NAME')).toThrowError(
+                Error, 'Sheet.pageMarginsPreset: "NOT_A_PRESET_NAME" is not supported.');
+        });
+
+        it("should throw an error if a preset is defined without all necessary attributes", () => {
+            expect(() => sheet.pageMarginsPreset('my_preset', { left: 123 })).toThrowError(
+                Error, 'Sheet.pageMarginsPreset: Invalid preset attributes for one or key(s)! - "left"');
         });
     });
 
@@ -917,9 +1265,287 @@ describe("Sheet", () => {
                         }
                     ]
                 },
-                { name: 'sheetData', attributes: {}, children: [] },
-                { name: 'pageMargins', attributes: {}, children: [] }
+                { name: 'sheetData', attributes: {}, children: [] }
             ]);
+        });
+
+        describe("printOptions", () => {
+            it("it should not add the printOptions if no attribute exists", () => {
+                sheet._printOptionsNode = {
+                    name: 'printOptions',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] }
+                ]);
+            });
+
+            it("should add the printOptions if an attribute is defined", () => {
+                sheet._printOptionsNode = {
+                    name: 'printOptions',
+                    attributes: {
+                        verticalCentered: false
+                    },
+                    children: []
+                };
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'printOptions',
+                        attributes: {
+                            verticalCentered: false
+                        },
+                        children: []
+                    }
+                ]);
+            });
+
+            it("should ignore printOptions without attributes", () => {
+                sheet._printOptionsNode = {
+                    name: 'printOptions',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    {
+                        name: "sheetPr",
+                        attributes: {},
+                        children: []
+                    },
+                    {
+                        name: "sheetFormatPr",
+                        attributes: {},
+                        children: []
+                    },
+                    {
+                        name: "sheetData",
+                        attributes: {},
+                        children: []
+                    }
+                ]);
+            });
+        });
+
+        describe("pageMargins", () => {
+            it("it should not add the pageMargins if no attribute exists", () => {
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBeUndefined();
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] }
+                ]);
+            });
+
+            it("it should add the pageMargins if at least one margin is set", () => {
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBeUndefined();
+                sheet.pageMarginsPreset('normal');
+                expect(sheet.pageMargins('left', 123)).toBe(sheet);
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'pageMargins',
+                        attributes: {
+                            left: 123,
+                            right: 0.7,
+                            top: 0.75,
+                            bottom: 0.75,
+                            header: 0.3,
+                            footer: 0.3
+                        },
+                        children: []
+                    }
+                ]);
+            });
+
+            it("should add the pageMargins if using template preset", () => {
+                sheet._pageMarginsPresetName = 'template';
+                sheet._pageMarginsPresets = {};
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {
+                        left: 1,
+                        right: 2,
+                        top: 3,
+                        bottom: 4,
+                        header: 5,
+                        footer: 6
+                    },
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBe('template');
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    sheet._pageMarginsNode
+                ]);
+            });
+
+            it("should add the pageMargins if using normal presets with a custom value", () => {
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBeUndefined();
+                expect(sheet.pageMarginsPreset('normal'));
+                expect(sheet.pageMargins('top', 999)).toBe(sheet);
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'pageMargins',
+                        attributes: {
+                            left: 0.7,
+                            right: 0.7,
+                            top: 999,
+                            bottom: 0.75,
+                            header: 0.3,
+                            footer: 0.3
+                        },
+                        children: []
+                    }
+                ]);
+            });
+
+            it("should add the pageMargins if using narrow presets", () => {
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBeUndefined();
+                sheet.pageMarginsPreset('wide');
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'pageMargins',
+                        attributes: {
+                            left: 1,
+                            right: 1,
+                            top: 1,
+                            bottom: 1,
+                            header: 0.5,
+                            footer: 0.5
+                        },
+                        children: []
+                    }
+                ]);
+            });
+
+            it("should add the pageMargins if preset set back to normal presets", () => {
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {},
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBeUndefined();
+                expect(sheet.pageMarginsPreset('wide'));
+                expect(sheet.pageMarginsPreset()).toBe('wide');
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'pageMargins',
+                        attributes: sheet._pageMarginsPresets.wide,
+                        children: []
+                    }
+                ]);
+                expect(sheet.pageMarginsPreset('normal'));
+                expect(sheet.pageMarginsPreset()).toBe('normal');
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'pageMargins',
+                        attributes: sheet._pageMarginsPresets.normal,
+                        children: []
+                    }
+                ]);
+            });
+
+            it("should not add pageMargins if preset is undefined", () => {
+                sheet._pageMarginsPresetName = 'template';
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {
+                        left: 1,
+                        right: 2,
+                        top: 3,
+                        bottom: 4,
+                        header: 5
+                    },
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset()).toBe('template');
+                expect(sheet.pageMarginsPreset(undefined)).toBe(sheet);
+                expect(sheet.pageMarginsPreset()).toBeUndefined();
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] }
+                ]);
+            });
+
+            it("should add new preset with no attributes", () => {
+                sheet._pageMarginsPresetName = undefined;
+                sheet._pageMarginsNode = {
+                    name: 'pageMargins',
+                    attributes: {
+                        left: 'LEFT',
+                        right: 'RIGHT',
+                        top: 'TOP',
+                        bottom: 'BOTTOM',
+                        header: 'HEADER',
+                        footer: 'FOOTER'
+                    },
+                    children: []
+                };
+                expect(sheet.pageMarginsPreset('test', {
+                    left: 6,
+                    right: 5,
+                    top: 4,
+                    bottom: 3,
+                    header: 2,
+                    footer: 1
+                })).toBe(sheet);
+                expect(sheet.pageMargins('left')).toBe(6);
+                expect(sheet.pageMarginsPreset('normal')).toBe(sheet);
+                expect(sheet.pageMargins('left')).toBe(0.7);
+                expect(sheet._pageMarginsNode.attributes).toEqual({});
+                expect(sheet.toXmls().sheet.children).toEqualJson([
+                    { name: 'sheetPr', attributes: {}, children: [] },
+                    { name: 'sheetFormatPr', attributes: {}, children: [] },
+                    { name: 'sheetData', attributes: {}, children: [] },
+                    {
+                        name: 'pageMargins',
+                        attributes: sheet._pageMarginsPresets.normal,
+                        children: []
+                    }
+                ]);
+            });
         });
 
         it("should add the mergeCells", () => {
@@ -936,8 +1562,7 @@ describe("Sheet", () => {
                     name: 'mergeCells',
                     attributes: {},
                     children: ["MERGE1", "MERGE2"]
-                },
-                { name: 'pageMargins', attributes: {}, children: [] }
+                }
             ]);
         });
 
@@ -955,8 +1580,7 @@ describe("Sheet", () => {
                     name: 'hyperlinks',
                     attributes: {},
                     children: ["HYPERLINK1", "HYPERLINK2"]
-                },
-                { name: 'pageMargins', attributes: {}, children: [] }
+                }
             ]);
         });
 
@@ -999,8 +1623,7 @@ describe("Sheet", () => {
                     name: 'hyperlinks',
                     attributes: {},
                     children: ["HYPERLINK1"]
-                },
-                { name: 'pageMargins', attributes: {}, children: [] }
+                }
             ]);
         });
     });
@@ -1326,6 +1949,118 @@ describe("Sheet", () => {
                     ]
                 }
             });
+        });
+    });
+
+    describe("pageBreaks", () => {
+        it("should return an Object that holds vertical and horizontal page-breaks", () => {
+            const pageBreaks = sheet.pageBreaks();
+            expect(sheet.verticalPageBreaks()).toEqual(pageBreaks.colBreaks);
+            expect(sheet.horizontalPageBreaks()).toEqual(pageBreaks.rowBreaks);
+        });
+        it("should return vertical page-breaks", () => {
+            expect(sheet.verticalPageBreaks().count).toBe(0);
+        });
+        it("should add a horizontal page-break", () => {
+            const pageBreaks = sheet.horizontalPageBreaks();
+            expect(pageBreaks.add(1)).toBe(pageBreaks);
+            expect(pageBreaks.count).toBe(1);
+        });
+        it("should return horizontal page-breaks", () => {
+            expect(sheet.horizontalPageBreaks().count).toBe(0);
+        });
+        it("should and then remove a vertical page-break", () => {
+            const pageBreaks = sheet.verticalPageBreaks();
+            expect(pageBreaks.add(1)).toBe(pageBreaks);
+            expect(pageBreaks.count).toBe(1);
+            expect(pageBreaks.remove(0)).toBe(pageBreaks);
+            expect(pageBreaks.count).toBe(0);
+        });
+        it("should return list of page-breaks ", () => {
+            expect(sheet.verticalPageBreaks().list.length).toBe(0);
+            expect(sheet.horizontalPageBreaks().list.length).toBe(0);
+        });
+    });
+
+    describe('Sheet.panes', () => {
+        it('should return undefined if pane node does not exist', () => {
+            expect(sheet.panes()).toBe(undefined);
+        });
+
+        it('should set freeze panes by xSplit and ySplit', () => {
+            sheet.freezePanes(1, 1);
+            expect(sheet.panes()).toEqualJson({
+                xSplit: 1,
+                ySplit: 1,
+                topLeftCell: "B2",
+                activePane: "bottomRight",
+                state: "frozen"
+            });
+        });
+
+        it('should set freeze panes by topLeftCell', () => {
+            sheet.freezePanes('B2');
+            expect(sheet.panes()).toEqualJson({
+                xSplit: 1,
+                ySplit: 1,
+                topLeftCell: "B2",
+                activePane: "bottomRight",
+                state: "frozen"
+            });
+        });
+
+        it('should have activePane=bottomLeft when freeze rows only', function () {
+            sheet.freezePanes('A3');
+            expect(sheet.panes().activePane).toBe('bottomLeft');
+            sheet.freezePanes(0, 2);
+            expect(sheet.panes().activePane).toBe('bottomLeft');
+        });
+
+        it('should have activePane=topRight when freeze columns only', function () {
+            sheet.freezePanes('C1');
+            expect(sheet.panes().activePane).toBe('topRight');
+            sheet.freezePanes(2, 0);
+            expect(sheet.panes().activePane).toBe('topRight');
+        });
+
+        it('should set split panes', () => {
+            sheet.splitPanes(2000, 1000);
+            expect(sheet.panes()).toEqualJson({
+                xSplit: 2000,
+                ySplit: 1000,
+                activePane: "bottomRight",
+                state: "split"
+            });
+        });
+
+        it('should reset panes', () => {
+            sheet.splitPanes(2000, 1000);
+            sheet.resetPanes();
+            expect(sheet.panes()).toBe(undefined);
+            expect(sheet._getOrCreateSheetViewNode().children.pane).toBe(undefined);
+            sheet.freezePanes(1, 1);
+            sheet.resetPanes();
+            expect(sheet.panes()).toBe(undefined);
+            expect(sheet._getOrCreateSheetViewNode().children.pane).toBe(undefined);
+            sheet.freezePanes('B2');
+            sheet.resetPanes();
+            expect(sheet.panes()).toBe(undefined);
+            expect(sheet._getOrCreateSheetViewNode().children.pane).toBe(undefined);
+        });
+
+        it('should remove pane attribute', () => {
+            sheet.splitPanes(2000, 1000);
+            sheet.panes(null);
+            expect(sheet.panes()).toBe(undefined);
+            expect(sheet._getOrCreateSheetViewNode().children.pane).toBe(undefined);
+            sheet.freezePanes(1, 1);
+            sheet.panes(null);
+            expect(sheet.panes()).toBe(undefined);
+            expect(sheet._getOrCreateSheetViewNode().children.pane).toBe(undefined);
+            sheet.freezePanes('B2');
+            sheet.panes(null);
+            expect(sheet.panes()).toBe(undefined);
+            expect(sheet._getOrCreateSheetViewNode().children.pane).toBe(undefined);
         });
     });
 });
